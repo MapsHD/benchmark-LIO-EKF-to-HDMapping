@@ -1,45 +1,93 @@
-ARG ROS_DISTRO=noetic
-FROM ros:${ROS_DISTRO}-ros-base
+FROM ubuntu:20.04
+
+SHELL ["/bin/bash", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
 
-SHELL ["/bin/bash", "-lc"]
-
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
-    cmake \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gnupg2 lsb-release software-properties-common \
+    build-essential git cmake \
     python3-pip \
-    nlohmann-json3-dev \
+    libceres-dev libeigen3-dev \
     libpcl-dev \
-    ros-${ROS_DISTRO}-pcl-ros \
-    ros-${ROS_DISTRO}-rosbag
-RUN pip3 install rosbags
-RUN mkdir -p /test_ws/src
-COPY src/ /test_ws/src
+    nlohmann-json3-dev \
+    tmux \
+    libflann-dev \
+    libvtk7-dev \
+    libgl1-mesa-glx \
+    libgl1-mesa-dri \
+    mesa-utils \
+    wget \
+    libusb-1.0-0-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Clone LIO-EKF if submodule is empty
-RUN if [ ! -f /test_ws/src/LIO-EKF/package.xml ]; then \
-      rm -rf /test_ws/src/LIO-EKF && \
-      git clone --depth 1 https://github.com/MapsHD/LIO-EKF.git /test_ws/src/LIO-EKF; \
-    fi
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+RUN echo "deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros/ubuntu $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/ros1.list
 
-# Clone kiss-icp if submodule is empty
-RUN if [ ! -f /test_ws/src/kiss-icp/README.md ]; then \
-      rm -rf /test_ws/src/kiss-icp && \
-      git clone --depth 1 https://github.com/PRBonn/kiss-icp.git /test_ws/src/kiss-icp; \
-    fi
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-noetic-desktop-full \
+    python3-rosdep \
+    python3-catkin-tools \
+    && rm -rf /var/lib/apt/lists/*
 
-# Clone LASzip for converter
-RUN if [ ! -f /test_ws/src/lio-ekf-to-hdmapping/src/3rdparty/LASzip/CMakeLists.txt ]; then \
-      mkdir -p /test_ws/src/lio-ekf-to-hdmapping/src/3rdparty && \
-      rm -rf /test_ws/src/lio-ekf-to-hdmapping/src/3rdparty/LASzip && \
-      git clone --depth 1 https://github.com/LASzip/LASzip.git /test_ws/src/lio-ekf-to-hdmapping/src/3rdparty/LASzip; \
-    fi
+WORKDIR /opt
 
-RUN if [ ! -f /test_ws/src/livox_ros_driver/package.xml ]; then rm -rf /test_ws/src/livox_ros_driver && git clone https://github.com/Livox-SDK/livox_ros_driver.git /test_ws/src/livox_ros_driver; fi
-RUN cd /test_ws && \
-    source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    rosdep update && \
-    rosdep install --from-paths src --ignore-src -r -y || true && \
-    source /opt/ros/${ROS_DISTRO}/setup.bash && \
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.24.0/cmake-3.24.0.tar.gz && \
+    tar -xzf cmake-3.24.0.tar.gz && \
+    cd cmake-3.24.0 && \
+    ./bootstrap --prefix=/opt/cmake-3.24 && \
+    make -j$(nproc) && \
+    make install
+
+RUN git clone https://gitlab.com/libeigen/eigen.git && \
+    cd eigen && git checkout 3.4.0 && \
+    mkdir build && cd build && \
+    /opt/cmake-3.24/bin/cmake .. -DCMAKE_INSTALL_PREFIX=/opt/eigen-3.4 && \
+    make -j$(nproc) && \
+    make install
+
+RUN git clone https://ceres-solver.googlesource.com/ceres-solver && \
+    cd ceres-solver && git fetch --all --tags && git checkout tags/2.1.0 && \
+    mkdir build && cd build && \
+    /opt/cmake-3.24/bin/cmake .. -DEigen3_DIR=/opt/eigen-3.4/share/eigen3/cmake && \
+    make -j$(nproc) && make install
+
+RUN git clone https://github.com/strasdat/Sophus && \
+    cd Sophus && mkdir build && cd build && \
+    /opt/cmake-3.24/bin/cmake .. -DEigen3_DIR=/opt/eigen-3.4/share/eigen3/cmake && \
+    make -j$(nproc) && make install
+
+
+RUN git clone https://github.com/Livox-SDK/Livox-SDK.git && \
+    cd Livox-SDK && \
+    rm -rf build && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    make install
+
+WORKDIR /ros_ws
+
+COPY ./src ./src
+
+RUN sed -i 's|/os1_cloud_node1/points|/livox/pointcloud|g' src/LIO-EKF/config/ntu_viral.yaml \
+ && sed -i 's|/os1_cloud_node1/imu|/livox/imu|g' src/LIO-EKF/config/ntu_viral.yaml
+
+RUN sed -i '/include(kiss-icp.cmake)/d' src/LIO-EKF/CMakeLists.txt
+
+RUN source /opt/ros/noetic/setup.bash && \
     catkin_make
+    
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g $GID ros && \
+    useradd -m -u $UID -g $GID -s /bin/bash ros
+WORKDIR /ros_ws
+
+RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc && \
+    echo "source /ros_ws/devel/setup.bash" >> ~/.bashrc
+
+CMD ["bash"]
