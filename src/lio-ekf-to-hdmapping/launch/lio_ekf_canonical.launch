@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- LIO-EKF on the benchmark's canonical bag: m2dgr/street_01.launch with lio_ekf_canonical.yaml;
+       the run script plays the bag. -->
+
+  <rosparam command="load" file="$(find lio-ekf-to-hdmapping)/config/lio_ekf_canonical.yaml" />
+
+  <!-- ROS paramaters -->
+  <arg name="visualize" default="true"/>
+  <arg name="bagfile" default=""/>
+
+  <param name="outputdir" type="string" value="$(find lio_ekf)/output/canonical/" />
+
+  <!-- Odometry node -->
+  <node pkg="lio_ekf" type="lio_ekf_node" name="lio_ekf_node" output="screen"/>
+
+  <!-- Rosbag player, if bagfile argument was specified -->
+  <group if="$(eval bagfile != '')">
+    <node pkg="rosbag" type="play" name="player" args="$(arg bagfile)" output="screen"/>
+  </group>
+  
+  
+  <!-- Visualizer -->
+  <group if="$(arg visualize)">
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find lio_ekf)/rviz/lio_ekf.rviz"/>
+  </group>
+  
+</launch>
